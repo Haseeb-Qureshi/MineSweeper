@@ -11,51 +11,39 @@ class Game
     @game_over = false
   end
 
-  def play
-    until @board.won? || @game_over
-      input = get_input
-      parse_input(input)
-      display
-    end
-    game_over_msg
-  end
-
-  def run
-    setup
+  def setup
+    welcome
     size = get_board_size
     mines = get_mines_number
     @board = Board.new(size, mines)
     play
   end
 
-  def toggle_flag(coords)
-    @board.toggle_flag(coords)
+  def play
+    until @board.won? || @game_over
+      input = get_input
+      parse_input(input)
+      render_grid
+    end
+    game_over_msg
   end
 
-  def reveal(coords)
-    @board.reveal(coords)
-  end
-
-  def display
+  def render_grid
     @board.rows.each_with_index do |row, x|
-      raster = []
-      row.each_with_index do |tile, y|
-        raster << parse_tile(tile, x, y)
-      end
-      puts raster.join("  ")
+      line = []
+      row.each_with_index { |tile, y| line << parse_tile(tile, x, y) }
+      puts line.join("  ")
     end
   end
+
 
   private
 
   def parse_input(input)
     case input.first
-    when "r"
-      @game_over = true unless reveal(input.drop(1))
-    when "f"
-      toggle_flag(input.drop(1))
-    when "s"
-      save_game(input[1])
+    when "r" then @game_over = true unless @board.place?(input.drop(1))
+    when "f" then @board.toggle_flag(input.drop(1))
+    when "s" then save_game(input[1])
     end
   end
 
@@ -65,11 +53,12 @@ class Game
     end
   end
 
-  def setup
-    puts "Welcome to Minesweeper! How big of a grid do you want to play in?"
+  def welcome
+    puts "Welcome to Minesweeper!"
   end
 
   def get_board_size
+    puts "How big of a grid do you want to play in?"
     puts "Enter a number:"
     size = Integer(gets.chomp)
   end
@@ -83,17 +72,24 @@ class Game
     puts "Enter in whether you want to Flag (f) or Reveal (r) a spot, or just "\
     "(s) if you want to save the game, and then your filename."
     puts "Format: \'f 4, 5\' or \'r 5, 7\' or \'s\ <filename>'"
-    input = gets.chomp.split(',').join(' ').downcase.split
+    input = gets.chomp.downcase.split(',').join(' ').split
 
-    return ["s", input.last, nil] if input.first == "s"
+    validate_input(input)
 
-    func, x, y = input
-    raise InputError if input.length != 3 || (func != "r" && func != "f")
-    x, y = Integer(x), Integer(y)
-    !@board.valid_tile?([x, y]) ? raise InputError : [func, x, y]
   rescue
     puts "Invalid entry. Try again."
     retry
+  end
+
+  def validate_input(input)
+    return ["s", input.last, nil] if input.first == "s"
+
+    func, x, y = input
+
+    raise InputError if input.length != 3 || (func != "r" && func != "f")
+    x, y = Integer(x), Integer(y)
+
+    !@board.valid_tile?([x, y]) ? raise InputError : [func, x, y]
   end
 
   def game_over_msg
@@ -103,22 +99,21 @@ class Game
   end
 
   def parse_tile(tile, x, y)
-    if @board.flags.include?([x,y])
-      "F"
-    elsif @board.shown.include?([x,y])
+    case
+    when @board.flags.include?([x,y]) then "F"
+    when @board.shown.include?([x,y])
       tile.neighbors == 0 ? "." : tile.neighbors.to_s
-    elsif tile.mine && @game_over
-      "X"
-    else
-      "_"
+    when tile.mine && @game_over then "X"
+    else "_"
     end
   end
 end
 
 class Tile
-  attr_accessor :neighbors, :mine
+  attr_accessor :neighbors, :mine, :visible
   def initialize
     @mine  = false
+    @visible = false
     @neighbors = 0
   end
 
@@ -131,12 +126,12 @@ class Board
   attr_accessor :flags, :shown, :rows
   FOUR_D_DIFFS = [-1, 0, 1, 0].zip([0, 1, 0, -1])
 
-  def initialize(size = 9, mines_no = 9)
+  def initialize(size = 9, mines_number = 9)
     @rows = Array.new(size) { Array.new(size) { Tile.new } }
     @flags = []
     @shown = []
-    @mines_number = mines_no
-    seed_board(@mines_number)
+    @num_mines = mines_number
+    seed_board(@num_mines)
   end
 
   def [](x, y)
@@ -144,10 +139,10 @@ class Board
   end
 
   def []=(x, y, val)
-    @rows[x][y] = val # tile assignement
+    @rows[x][y] = val
   end
 
-  def reveal(coords)
+  def place?(coords)
     x, y = coords
     return false if self[x,y].mine
     @shown << [x,y] if splash(x,y) == []
@@ -157,14 +152,10 @@ class Board
   end
 
   def toggle_flag(coords)
-    if @shown.include?(coords)
-      false
-    elsif @flags.include?(coords)
-      @flags.delete(coords)
-      true
-    else
-      @flags << coords
-      true
+    case
+    when @shown.include?(coords) then false
+    when @flags.include?(coords) then @flags.delete(coords); true
+    else @flags << coords; true
     end
   end
 
@@ -175,6 +166,7 @@ class Board
       mines.uniq!
     end
     mines.each { |x, y| self[x, y].mine = true }
+
     initialize_tiles
     self
   end
@@ -196,8 +188,7 @@ class Board
   end
 
   def won?
-    @shown.count + @mines_number == @rows.length*@rows.first.length &&
-      @flags.count == @mines_number
+    @shown.count + @num_mines == @rows.length**2 && @flags.count == @num_mines
   end
 
   def valid_tile?(coord)
@@ -206,15 +197,13 @@ class Board
   end
 
   def make_square(x, y)
-    potential_neighbors = []
+    adjacents = []
     (x - 1..x + 1).each do |x|
       (y - 1..y + 1) .each do |y|
-        potential_neighbors << [x, y]
+        adjacents << [x, y]
       end
     end
-    potential_neighbors.select! do |coords|
-      valid_tile?(coords) && coords != [x, y]
-    end
+    adjacents.select! { |coords| valid_tile?(coords) && coords != [x, y] }
   end
 
  private
@@ -226,11 +215,11 @@ class Board
   def initialize_tiles
     @rows.each_with_index do |row, x|
       row.each_with_index do |tile, y|
-        potential_neighbors = make_square(x, y)
-        #elements in that 3x3 square have a mine?
-        potential_neighbors.select! { |coords| self[*coords].mine }
-        #if they do, increment the neighbors
-        self[x, y].neighbors = potential_neighbors.count
+        #check how many neighbors in a square around you have mines,
+        #and increment their neighbor-mine count accordingly
+        mines = make_square(x, y)
+        mines.select! { |coords| self[*coords].mine }
+        self[x, y].neighbors = mines.count
       end
     end
   end
@@ -247,18 +236,14 @@ class Board
     # stop once queue empty
 
 
-  #  debugger
-    # if !self[x,y].mine && !@shown.include?([x, y]) && self[x,y].neighbors > 1
-      # @shown << [x, y]
-    # end
     @shown << [x,y] if self[x,y].neighbors > 0 && !@shown.include?([x,y])
-    return [] if @shown.include?([x,y]) #|| self[x,y].neighbors > 0
+    return [] if @shown.include?([x,y])
     reveals = []
     FOUR_D_DIFFS.each do |dx, dy|
       if valid_tile?([x+dx, y+dy]) && !@shown.include?([x+dx, y+dy])
         p "#{[x + dx]} #{[y + dy]}"
         neighbor = [self[x+dx, y+dy], [x+dx, y+dy]]
-        if !neighbor.first.mine #neighbor.first.neighbors == 0
+        if !neighbor.first.mine
           reveals << neighbor
           @shown << [x, y]
         end
@@ -266,13 +251,11 @@ class Board
     end
 
     reveals.each do |tneighbor|
-      # p "Further splashing #{tneighbor.last}"
-      # p @shown
       further_splash = splash(*tneighbor.last)
       @shown += further_splash.map(&:last) unless further_splash.empty?
       reveals += further_splash
     end
-    reveals #.map(&:last)
+    reveals
   end
 end
 
@@ -281,8 +264,6 @@ if __FILE__ == $0
     my_game = Game.load(ARGV.shift)
     my_game.play
   else
-    Game.new.run
+    Game.new.setup
   end
-  # Game.load("file2.txt").play
 end
-# Game.new.play
